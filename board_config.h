@@ -1,6 +1,15 @@
 #ifndef __BOARD__
 #define __BOARD__
 
+//
+// Configuration
+//
+#define ALERT_LEVEL 50
+#define ALERT_INTERVAL 60
+#define ALERT_EVERY ALERT_INTERVAL * 5 * 1000
+#define SENSOR_ID 123123
+#define SENSOR_LOCATION "15 Isles of Venice, Apt 7"
+
 #define LEQ_PERIOD 1          // second(s)
 #define WEIGHTING C_weighting // Also avaliable: 'C_weighting' or 'None' (Z_weighting)
 #define LEQ_UNITS "LAeq"      // customize based on above weighting used

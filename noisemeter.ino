@@ -48,15 +48,6 @@
 #include "filters.h"
 #include "board_config.h"
 
-//
-// Configuration
-//
-#define ALERT_LEVEL 50
-#define ALERT_INTERVAL 60
-#define ALERT_EVERY ALERT_INTERVAL * 5 * 1000
-#define SENSOR_ID 123123
-#define SENSOR_LOCATION "15 Isles of Venice, Apt 7"
-
 #define NETWORKING 0
 
 // Calculate reference amplitude value at compile time
