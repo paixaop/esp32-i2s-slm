@@ -1,0 +1,6 @@
+{
+    "board": "esp32:esp32:m5stick-c",
+    "configuration": "PartitionScheme=default,UploadSpeed=1500000,DebugLevel=none",
+    "sketch": "noisemeter.ino",
+    "port": "/dev/tty.usbserial-095AF3E983"
+}
