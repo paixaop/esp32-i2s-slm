@@ -34,11 +34,13 @@
  * which the sensitivity is specified (typically 94dB, pure sine
  * wave at 1KHz).
  *
- * Displays line on the small OLED screen with 'short' LAeq(125ms)
- * response and numeric LAeq(1sec) dB value from the signal RMS.
  */
-
+#include <FreeRTOS.h>
 #include <driver/i2s.h>
+#include <math.h>
+#include <HardwareSerial.h>
+#include <WiFi.h>
+
 #include "sos-iir-filter.h"
 
 #include "utlgbotlib.h"
@@ -87,10 +89,7 @@ void mic_i2s_init()
         communication_format : i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
         intr_alloc_flags : ESP_INTR_FLAG_LEVEL1,
         dma_buf_count : DMA_BANKS,
-        dma_buf_len : DMA_BANK_SIZE,
-        /*use_apll : true,
-    tx_desc_auto_clear : false,
-    fixed_mclk : 0*/
+        dma_buf_len : DMA_BANK_SIZE
     };
     // I2S pin mapping
     const i2s_pin_config_t pin_config = {
@@ -130,7 +129,7 @@ void mic_i2s_init()
 // while main task can do something else, like update the
 // display in the example
 //
-// As this is intended to run as separate hihg-priority task,
+// As this is intended to run as separate high-priority task,
 // we only do the minimum required work with the I2S data
 // until it is 'compressed' into sum of squares
 //
@@ -151,7 +150,7 @@ void mic_i2s_reader_task(void *parameter)
         // Block and wait for microphone values from I2S
         //
         // Data is moved from DMA buffers to our 'samples' buffer by the driver ISR
-        // and when there is requested ammount of data, task is unblocked
+        // and when there is requested amount of data, task is unblocked
         //
         // Note: i2s_read does not care it is writing in float[] buffer, it will write
         //       integer values to the given address, as received from the hardware peripheral.
@@ -171,14 +170,14 @@ void mic_i2s_reader_task(void *parameter)
         // writes filtered samples back to the same buffer.
         q.sum_sqr_SPL = MIC_EQUALIZER.filter(samples, samples, SAMPLES_SHORT);
 
-        // Apply weighting and calucate weigthed sum of squares
+        // Apply weighting and calculate weighted sum of squares
         q.sum_sqr_weighted = WEIGHTING.filter(samples, samples, SAMPLES_SHORT);
 
         // Debug only. Ticks we spent filtering and summing block of I2S data
         q.proc_ticks = xTaskGetTickCount() - start_tick;
 
         // Send the sums to FreeRTOS queue where main task will pick them up
-        // and further calcualte decibel values (division, logarithms, etc...)
+        // and further calculate decibel values (division, logarithms, etc...)
         xQueueSend(samples_queue, &q, portMAX_DELAY);
     }
 }
@@ -242,7 +241,7 @@ const char *noise_level(double level)
 void setup()
 {
 
-    // If needed, now you can actually lower the CPU frquency,
+    // If needed, now you can actually lower the CPU frequency,
     // i.e. if you want to (slightly) reduce ESP32 power consumption
     setCpuFrequencyMhz(80); // It should run as low as 80MHz
 
@@ -274,7 +273,7 @@ void setup()
     Moving_Average<float, ALERT_INTERVAL> ma;
     char output[200];
 
-    // Read sum of samaples, calculated by 'i2s_reader_task'
+    // Read sum of samples, calculated by 'i2s_reader_task'
     while (xQueueReceive(samples_queue, &q, portMAX_DELAY))
     {
 
@@ -282,7 +281,7 @@ void setup()
         double short_RMS = sqrt(double(q.sum_sqr_SPL) / SAMPLES_SHORT);
         double short_SPL_dB = MIC_OFFSET_DB + MIC_REF_DB + 20 * log10(short_RMS / MIC_REF_AMPL);
 
-        // In case of acoustic overload or below noise floor measurement, report infinty Leq value
+        // In case of acoustic overload or below noise floor measurement, report infinity Leq value
         if (short_SPL_dB > MIC_OVERLOAD_DB)
         {
             Leq_sum_sqr = INFINITY;
