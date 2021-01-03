@@ -40,11 +40,15 @@
 
 #include <driver/i2s.h>
 #include "sos-iir-filter.h"
-#include "moving_average.h"
+
 #include "utlgbotlib.h"
 #include "telegram_config.h"
 #include "wifi_config.h"
+#include "moving_average.h"
 
+//
+// Configuration
+//
 #define ALERT_LEVEL 50
 #define ALERT_INTERVAL 60
 #define ALERT_EVERY ALERT_INTERVAL * 5 * 1000
@@ -53,22 +57,18 @@
 
 #define NETWORKING 0
 
-//
-// Configuration
-//
-
 #define LEQ_PERIOD 1          // second(s)
 #define WEIGHTING C_weighting // Also avaliable: 'C_weighting' or 'None' (Z_weighting)
 #define LEQ_UNITS "LAeq"      // customize based on above weighting used
 #define DB_UNITS "dBA"        // customize based on above weighting used
-#define USE_DISPLAY 1
+#define USE_DISPLAY 0
 
 // NOTE: Some microphones require at least DC-Blocker filter
 #define MIC_EQUALIZER ICS43434 // See below for defined IIR filters or set to 'None' to disable
 #define MIC_OFFSET_DB 3.0103   // Default offset (sine-wave RMS vs. dBFS). Modify this value for linear calibration
 
 // Customize these values from microphone datasheet
-#define MIC_SENSITIVITY -22   // dBFS value expected at MIC_REF_DB (Sensitivity value from datasheet)
+#define MIC_SENSITIVITY -26   // dBFS value expected at MIC_REF_DB (Sensitivity value from datasheet)
 #define MIC_REF_DB 94.0       // Value at which point sensitivity is specified in datasheet (dB)
 #define MIC_OVERLOAD_DB 115.0 // dB - Acoustic overload point
 #define MIC_NOISE_DB 29       // dB - Noise floor
@@ -86,10 +86,9 @@ constexpr double MIC_REF_AMPL = pow(10, double(MIC_SENSITIVITY) / 20) * ((1 << (
 //
 // Below ones are just example for my board layout, put here the pins you will use
 //
-#define I2S_WS 33       // LRCK Pin
-#define I2S_BCK 19      // BCK Pin
-#define I2S_DATA_OUT 22 // Data output Pin
-#define I2S_DATA_IN 23  // Data input Pin
+#define I2S_WS 33
+#define I2S_SCK 19
+#define I2S_SD 23
 
 // I2S peripheral to use (0 or 1)
 #define I2S_PORT I2S_NUM_0
@@ -231,6 +230,9 @@ QueueHandle_t samples_queue;
 // Static buffer for block of samples
 float samples[SAMPLES_SHORT] __attribute__((aligned(4)));
 
+// Telegram Bot
+uTLGBot Bot(TLG_TOKEN);
+
 //
 // I2S Microphone sampling setup
 //
@@ -240,22 +242,24 @@ void mic_i2s_init()
     // NOTE: Recent update to Arduino_esp32 (1.0.2 -> 1.0.3)
     //       seems to have swapped ONLY_LEFT and ONLY_RIGHT channels
     const i2s_config_t i2s_config = {
-        mode : (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
+        mode : i2s_mode_t(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
         sample_rate : SAMPLE_RATE,
         bits_per_sample : i2s_bits_per_sample_t(SAMPLE_BITS),
-        channel_format : I2S_CHANNEL_FMT_ALL_RIGHT,
-        communication_format : I2S_COMM_FORMAT_I2S,
+        channel_format : I2S_CHANNEL_FMT_ONLY_LEFT,
+        communication_format : i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
         intr_alloc_flags : ESP_INTR_FLAG_LEVEL1,
         dma_buf_count : DMA_BANKS,
-        dma_buf_len : DMA_BANK_SIZE
+        dma_buf_len : DMA_BANK_SIZE,
+        /*use_apll : true,
+    tx_desc_auto_clear : false,
+    fixed_mclk : 0*/
     };
-
     // I2S pin mapping
     const i2s_pin_config_t pin_config = {
-        bck_io_num : I2S_BCK,
+        bck_io_num : I2S_SCK,
         ws_io_num : I2S_WS,
         data_out_num : -1, // not used
-        data_in_num : I2S_DATA_IN
+        data_in_num : I2S_SD
     };
 
     i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
@@ -402,12 +406,10 @@ void setup()
 
     // If needed, now you can actually lower the CPU frquency,
     // i.e. if you want to (slightly) reduce ESP32 power consumption
-    //setCpuFrequencyMhz(80); // It should run as low as 80MHz
+    setCpuFrequencyMhz(80); // It should run as low as 80MHz
 
     Serial.begin(112500);
     delay(1000); // Safety
-
-    uTLGBot Bot(TLG_TOKEN);
 
     // Connect to the WiFi network (see function below loop)
 #if (NETWORKING > 0)
@@ -430,6 +432,7 @@ void setup()
     double Leq_dB = 0;
 
     int alert_interval = 0;
+    bool first_alert = true;
     Moving_Average<float, ALERT_INTERVAL> ma;
     char output[200];
 
@@ -476,26 +479,32 @@ void setup()
             else
             {
                 // Serial output, customize (or remove) as needed
-                Serial.printf("Level: %.1fdB - %s\n", Leq_dB, noise_level(Leq_dB));
+                Serial.printf("Moving Average: %.1fdb Level: %.1fdB - %s\n", ma.get(), Leq_dB, noise_level(Leq_dB));
+            }
+
+            // Calculate the moving average of the level
+            ma(Leq_dB);
+
+            if (ma.get() >= ALERT_LEVEL)
+            {
+                Serial.printf("Moving Average above %d! - Time: %d\n", ALERT_LEVEL, millis());
+
+                // If its the first time we're alerting don't care about time intervals
+                if (first_alert || (millis() - alert_interval >= ALERT_EVERY))
+                {
+                    first_alert = false;
+                    sprintf(output, "Noise Alert! The sensor at %s is reporting sustained noise above %0.1fdB - %s.", SENSOR_LOCATION, ma.get(), noise_level(ma));
+                    Serial.println(output);
+
+#if (NETWORKING > 0)
+                    Bot.sendMessage(TLG_CHAT_ID, output);
+#endif
+                    alert_interval = millis();
+                }
             }
 
             // Debug only
             //Serial.printf("%u processing ticks\n", q.proc_ticks);
-        }
-
-        // Calculate the moving average of the level
-        ma(Leq_dB);
-        if (ma >= ALERT_LEVEL)
-        {
-            if (millis() - alert_interval >= ALERT_EVERY)
-            {
-                sprintf(output, "Noise Alert! The sensor at %s is reporting sustained noise above %0.1fdB - %s.", SENSOR_LOCATION, ma, noise_level(ma));
-
-#if (NETWORKING > 0)
-                Bot.sendMessage(TLG_CHAT_ID, output);
-#endif
-                alert_interval = millis();
-            }
         }
     }
 }
